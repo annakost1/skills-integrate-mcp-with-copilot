@@ -2,14 +2,22 @@
 High School Management System API
 
 A super simple FastAPI application that allows students to view and sign up
-for extracurricular activities at Mergington High School.
+for extracurricular activities at Mergington High School. Teachers manage
+student registrations.
 """
 
-from fastapi import FastAPI, HTTPException
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
-import os
-from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -18,6 +26,128 @@ app = FastAPI(title="Mergington High School API",
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+SESSION_COOKIE = "teacher_session"
+SESSION_TTL_SECONDS = 8 * 60 * 60
+_teacher_sessions: dict[str, tuple[str, float]] = {}
+
+
+class TeacherLogin(BaseModel):
+    username: str
+    password: str
+
+
+def hash_password(password: str) -> str:
+    """Return a salted scrypt hash suitable for the local teacher credentials file."""
+    salt = secrets.token_bytes(16)
+    password_hash = hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
+    )
+    return f"scrypt${salt.hex()}${password_hash.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Verify a password against the stored scrypt hash."""
+    try:
+        algorithm, salt_hex, hash_hex = stored_hash.split("$")
+        if algorithm != "scrypt":
+            return False
+        salt = bytes.fromhex(salt_hex)
+        expected_hash = bytes.fromhex(hash_hex)
+        actual_hash = hashlib.scrypt(
+            password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
+        )
+    except (AttributeError, ValueError):
+        return False
+    return hmac.compare_digest(actual_hash, expected_hash)
+
+
+def load_teacher_credentials() -> dict[str, str]:
+    credentials_path = Path(
+        os.environ.get("TEACHER_CREDENTIALS_FILE", current_dir / "teachers.json")
+    )
+    try:
+        with credentials_path.open(encoding="utf-8") as credentials_file:
+            data = json.load(credentials_file)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Teacher credentials are not configured correctly",
+        ) from error
+
+    teachers = data.get("teachers") if isinstance(data, dict) else None
+    if not isinstance(teachers, dict) or not all(
+        isinstance(username, str) and isinstance(password_hash, str)
+        for username, password_hash in teachers.items()
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Teacher credentials are not configured correctly",
+        )
+    return teachers
+
+
+def get_current_teacher(request: Request) -> str:
+    session_id = request.cookies.get(SESSION_COOKIE)
+    session = _teacher_sessions.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=401, detail="Teacher login required")
+
+    username, expires_at = session
+    if expires_at <= time.time():
+        _teacher_sessions.pop(session_id, None)
+        raise HTTPException(status_code=401, detail="Teacher session has expired")
+    return username
+
+
+@app.post("/auth/login")
+def login(credentials: TeacherLogin, response: Response):
+    stored_hash = load_teacher_credentials().get(credentials.username)
+    if stored_hash is None or not verify_password(credentials.password, stored_hash):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    session_id = secrets.token_urlsafe(32)
+    _teacher_sessions[session_id] = (
+        credentials.username,
+        time.time() + SESSION_TTL_SECONDS,
+    )
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=session_id,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=os.environ.get("COOKIE_SECURE", "").lower() == "true",
+        samesite="strict",
+        path="/",
+    )
+    return {"authenticated": True, "username": credentials.username}
+
+
+@app.post("/auth/logout")
+def logout(request: Request, response: Response):
+    session_id = request.cookies.get(SESSION_COOKIE)
+    if session_id:
+        _teacher_sessions.pop(session_id, None)
+    response.delete_cookie(
+        key=SESSION_COOKIE,
+        httponly=True,
+        secure=os.environ.get("COOKIE_SECURE", "").lower() == "true",
+        samesite="strict",
+        path="/",
+    )
+    return {"authenticated": False}
+
+
+@app.get("/auth/session")
+def get_session(request: Request):
+    try:
+        username = get_current_teacher(request)
+    except HTTPException as error:
+        if error.status_code != 401:
+            raise
+        return {"authenticated": False}
+    return {"authenticated": True, "username": username}
+
 
 # In-memory activity database
 activities = {
@@ -88,7 +218,10 @@ def get_activities():
     return activities
 
 
-@app.post("/activities/{activity_name}/signup")
+@app.post(
+    "/activities/{activity_name}/signup",
+    dependencies=[Depends(get_current_teacher)],
+)
 def signup_for_activity(activity_name: str, email: str):
     """Sign up a student for an activity"""
     # Validate activity exists
@@ -110,7 +243,10 @@ def signup_for_activity(activity_name: str, email: str):
     return {"message": f"Signed up {email} for {activity_name}"}
 
 
-@app.delete("/activities/{activity_name}/unregister")
+@app.delete(
+    "/activities/{activity_name}/unregister",
+    dependencies=[Depends(get_current_teacher)],
+)
 def unregister_from_activity(activity_name: str, email: str):
     """Unregister a student from an activity"""
     # Validate activity exists
