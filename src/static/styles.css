@@ -16,12 +16,48 @@ body {
 }
 
 header {
+  position: relative;
   text-align: center;
   padding: 20px 0;
   margin-bottom: 30px;
   background-color: #1a237e;
   color: white;
   border-radius: 5px;
+}
+
+.user-menu-container {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+#user-menu-button {
+  min-width: 42px;
+  padding: 8px;
+  font-size: 20px;
+}
+
+.user-menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 190px;
+  padding: 12px;
+  border-radius: 5px;
+  background: white;
+  color: #333;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.user-menu p {
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+
+.user-menu button {
+  width: 100%;
+  margin-top: 6px;
 }
 
 header h1 {
@@ -48,6 +84,10 @@ section {
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
   width: 100%;
   max-width: 500px;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 section h3 {
@@ -149,6 +189,30 @@ section h3 {
   font-size: 16px;
 }
 
+dialog {
+  width: min(420px, calc(100% - 32px));
+  margin: auto;
+  padding: 24px;
+  border: none;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+}
+
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+dialog h3 {
+  margin-bottom: 20px;
+  color: #1a237e;
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 button {
   background-color: #1a237e;
   color: white;
@@ -164,10 +228,19 @@ button:hover {
   background-color: #3949ab;
 }
 
+.secondary-button {
+  background-color: #666;
+}
+
+.secondary-button:hover {
+  background-color: #4d4d4d;
+}
+
 .message {
   margin-top: 20px;
   padding: 10px;
   border-radius: 4px;
+  align-self: flex-start;
 }
 
 .success {
@@ -190,6 +263,24 @@ button:hover {
 
 .hidden {
   display: none;
+}
+
+@media (max-width: 480px) {
+  body {
+    padding: 12px;
+  }
+
+  header {
+    padding: 58px 12px 20px;
+  }
+
+  main {
+    gap: 16px;
+  }
+
+  section {
+    padding: 16px;
+  }
 }
 
 footer {
